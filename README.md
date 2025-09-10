@@ -58,3 +58,4 @@ All dependencies are managed via PEP 723 inline metadata:
 - google-auth-httplib2
 - click
 - markdown
+- Pygments (for syntax highlighting in code blocks)
