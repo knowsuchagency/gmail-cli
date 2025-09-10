@@ -4,12 +4,12 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 ## Project Overview
 
-Gmail CLI Sender is a Python command-line tool for sending emails via Gmail API using OAuth2 authentication. It's a single-script application that leverages PEP 723 inline metadata for dependency management, allowing it to run directly with `uv run` without requiring separate configuration files.
+Gmail CLI Sender is a Python command-line tool for sending emails via Gmail API using OAuth2 authentication. It's a single-script application that uses `pyproject.toml` for dependency management with uv, allowing it to run directly with `uv run` after syncing dependencies.
 
 ## Architecture
 
 - **Single-file design**: All functionality is contained in `gmail_sender.py`
-- **PEP 723 compliance**: Dependencies are declared inline using `# /// script` metadata
+- **pyproject.toml dependency management**: Dependencies are declared in `pyproject.toml` and managed with uv
 - **OAuth2 flow**: Uses Google's OAuth2 with local server callback for authentication
 - **Multi-format support**: Converts Markdown (default), HTML, and plaintext to HTML emails
 - **Gmail API integration**: Leverages Gmail API v1 for sending emails and retrieving signatures
@@ -52,14 +52,20 @@ uv run gmail_sender.py --to test@example.com --subject "Plain Text" --body "Simp
 
 ### Development and Debugging
 ```bash
-# Check dependencies (they're inline in the script)
-head -15 gmail_sender.py
+# Install/sync dependencies
+uv sync
+
+# Check dependencies
+cat pyproject.toml
 
 # Validate OAuth credentials setup
 ls -la /Users/stephanfitzpatrick/Downloads/OAuth\ Client\ ID\ Secret\ \(1\).json
 
 # Check if authentication token exists
 ls -la gmail_token.json
+
+# Check virtual environment
+ls -la .venv/
 ```
 
 ## Configuration Requirements
@@ -101,7 +107,10 @@ ls -la gmail_token.json
 ## File Structure
 ```
 gmail-cli/
-├── gmail_sender.py          # Main application (PEP 723 compliant)
+├── gmail_sender.py          # Main application
+├── pyproject.toml          # Project configuration and dependencies
+├── uv.lock                 # Dependency lock file (auto-generated)
+├── .venv/                  # Virtual environment (auto-generated)
 ├── README.md               # Usage documentation
 ├── gmail_token.json        # OAuth2 token (auto-generated, gitignored)
 ├── test_markdown.md        # Markdown test file
@@ -110,9 +119,18 @@ gmail-cli/
 ```
 
 ## Dependencies Management
-Dependencies are managed via PEP 723 inline metadata in the script header:
+Dependencies are managed via `pyproject.toml` and installed with `uv sync`:
 - google-api-python-client
 - google-auth, google-auth-oauthlib, google-auth-httplib2
 - click (CLI interface)
 - markdown (content conversion)
 - Pygments (syntax highlighting)
+
+### Initial Setup
+```bash
+# Install dependencies and create virtual environment
+uv sync
+
+# Run the tool (uv will automatically use the .venv)
+uv run gmail_sender.py --help
+```

@@ -1,15 +1,3 @@
-# /// script
-# requires-python = ">=3.8"
-# dependencies = [
-#     "google-api-python-client",
-#     "google-auth",
-#     "google-auth-oauthlib",
-#     "google-auth-httplib2",
-#     "click",
-#     "markdown",
-#     "Pygments",
-# ]
-# ///
 
 """
 Gmail CLI sender tool using OAuth2 authentication.
