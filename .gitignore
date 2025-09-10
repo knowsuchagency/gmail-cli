@@ -1,5 +1,7 @@
-# Gmail API token
+# Gmail API token and configuration
 gmail_token.json
+config.json
+credentials.json
 
 # Python
 __pycache__/

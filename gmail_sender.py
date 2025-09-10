@@ -16,6 +16,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 import click
 import markdown
+from typing import Dict, Optional, Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -29,18 +30,143 @@ SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
     'https://www.googleapis.com/auth/gmail.settings.basic'
 ]
-CREDENTIALS_FILE = '/Users/stephanfitzpatrick/Downloads/OAuth Client ID Secret (1).json'
-TOKEN_FILE = 'gmail_token.json'
+
+# Configuration management
+class GmailConfig:
+    """Configuration management for Gmail CLI."""
+    
+    def __init__(self):
+        self.config_dir = Path.home() / '.config' / 'gmail-cli'
+        self.default_config_file = self.config_dir / 'config.json'
+        self.default_token_file = self.config_dir / 'token.json'
+        
+        # Legacy paths for backward compatibility
+        self.legacy_credentials_file = '/Users/stephanfitzpatrick/Downloads/OAuth Client ID Secret (1).json'
+        self.legacy_token_file = Path.cwd() / 'gmail_token.json'
+        
+        # Default configuration
+        self.defaults = {
+            'token_file': str(self.default_token_file),
+            'client_id': None,
+            'client_secret': None,
+            'config_dir': str(self.config_dir)
+        }
+        
+    def ensure_config_dir(self) -> None:
+        """Create configuration directory if it doesn't exist."""
+        try:
+            self.config_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except PermissionError as e:
+            raise click.ClickException(
+                f"Cannot create configuration directory {self.config_dir}: {e}"
+            )
+        except Exception as e:
+            raise click.ClickException(
+                f"Error creating configuration directory {self.config_dir}: {e}"
+            )
+    
+    def load_config_file(self, config_file: Optional[str] = None) -> Dict[str, Any]:
+        """Load configuration from JSON file."""
+        config_path = Path(config_file) if config_file else self.default_config_file
+        
+        if not config_path.exists():
+            return {}
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                return config if isinstance(config, dict) else {}
+        except json.JSONDecodeError as e:
+            raise click.ClickException(
+                f"Invalid JSON in configuration file {config_path}: {e}"
+            )
+        except Exception as e:
+            raise click.ClickException(
+                f"Error reading configuration file {config_path}: {e}"
+            )
+    
+    def merge_config(self, 
+                    config_file_path: Optional[str] = None,
+                    credentials_file: Optional[str] = None,
+                    token_file: Optional[str] = None,
+                    client_id: Optional[str] = None,
+                    client_secret: Optional[str] = None) -> Dict[str, Any]:
+        """Merge configuration from file, CLI args, and defaults."""
+        # Start with defaults
+        config = self.defaults.copy()
+        
+        # Load from config file (overrides defaults for client_id/secret and token_file only)
+        file_config = self.load_config_file(config_file_path)
+        # Only allow specific keys from config file (no credentials_file)
+        allowed_config_keys = {'token_file', 'client_id', 'client_secret'}
+        filtered_file_config = {k: v for k, v in file_config.items() if k in allowed_config_keys}
+        config.update(filtered_file_config)
+        
+        # CLI arguments override everything
+        if token_file is not None:
+            config['token_file'] = token_file
+        if client_id is not None:
+            config['client_id'] = client_id
+        if client_secret is not None:
+            config['client_secret'] = client_secret
+        
+        # Credentials file is CLI-only, but add to config for authentication logic
+        config['credentials_file'] = credentials_file
+            
+        # Handle backward compatibility for credentials file (only if no CLI credentials_file provided)
+        if not config['credentials_file'] and not (config['client_id'] and config['client_secret']):
+            if Path(self.legacy_credentials_file).exists():
+                config['credentials_file'] = self.legacy_credentials_file
+                click.echo(f"⚠️  Using legacy credentials file: {self.legacy_credentials_file}", err=True)
+                click.echo(f"   Consider using --client-id and --client-secret instead", err=True)
+        
+        return config
+    
+    def validate_config(self, config: Dict[str, Any]) -> None:
+        """Validate the final configuration."""
+        # Must have either credentials file OR client_id+client_secret
+        has_credentials_file = config.get('credentials_file') and Path(config['credentials_file']).exists()
+        has_client_credentials = config.get('client_id') and config.get('client_secret')
+        
+        if not has_credentials_file and not has_client_credentials:
+            error_msg = (
+                "Authentication configuration missing. You must provide either:\n"
+                "  1. Credentials file via --credentials-file (CLI argument only)\n"
+                "  2. Client ID and secret via --client-id and --client-secret (CLI args or config file)\n\n"
+                f"For option 1: Download OAuth credentials from Google Cloud Console\n"
+                f"For option 2: Get client credentials from your Google Cloud project"
+            )
+            raise click.ClickException(error_msg)
+        
+        # If both provided, credentials file takes precedence
+        if has_credentials_file and has_client_credentials:
+            click.echo("⚠️  Both credentials file and client ID/secret provided. Using credentials file.", err=True)
+    
+    def migrate_legacy_token(self, config: Dict[str, Any]) -> None:
+        """Migrate legacy token file to new location if needed."""
+        if self.legacy_token_file.exists() and not Path(config['token_file']).exists():
+            if click.confirm(
+                f"\nFound existing token file at {self.legacy_token_file}.\n"
+                f"Would you like to migrate it to {config['token_file']}?"
+            ):
+                try:
+                    self.ensure_config_dir()
+                    self.legacy_token_file.rename(config['token_file'])
+                    click.echo(f"✓ Token file migrated to {config['token_file']}")
+                except Exception as e:
+                    click.echo(f"⚠️  Could not migrate token file: {e}", err=True)
+                    click.echo(f"   You may need to re-authenticate", err=True)
 
 
-def authenticate_gmail():
-    """Authenticate with Gmail API using OAuth2 flow."""
+def authenticate_gmail(config: Dict[str, Any]):
+    """Authenticate with Gmail API using OAuth2 flow with configurable credentials."""
     creds = None
+    token_file = config['token_file']
     
     # Load existing token if available
-    if os.path.exists(TOKEN_FILE):
+    if os.path.exists(token_file):
         try:
-            creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+            creds = Credentials.from_authorized_user_file(token_file, SCOPES)
         except Exception as e:
             click.echo(f"Error loading existing token: {e}", err=True)
     
@@ -55,22 +181,48 @@ def authenticate_gmail():
                 creds = None
         
         if not creds:
-            if not os.path.exists(CREDENTIALS_FILE):
-                raise click.ClickException(
-                    f"Credentials file not found at {CREDENTIALS_FILE}. "
-                    "Please ensure you have downloaded the OAuth client credentials from Google Cloud Console."
-                )
-            
+            # Create OAuth2 flow based on configuration
             try:
-                flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_FILE, SCOPES)
+                if config.get('credentials_file'):
+                    # Use credentials file method
+                    if not os.path.exists(config['credentials_file']):
+                        raise click.ClickException(
+                            f"Credentials file not found at {config['credentials_file']}. "
+                            "Please ensure you have downloaded the OAuth client credentials from Google Cloud Console."
+                        )
+                    flow = InstalledAppFlow.from_client_secrets_file(config['credentials_file'], SCOPES)
+                elif config.get('client_id') and config.get('client_secret'):
+                    # Use client ID/secret method
+                    client_config = {
+                        'installed': {
+                            'client_id': config['client_id'],
+                            'client_secret': config['client_secret'],
+                            'auth_uri': 'https://accounts.google.com/o/oauth2/auth',
+                            'token_uri': 'https://oauth2.googleapis.com/token',
+                            'redirect_uris': ['http://localhost']
+                        }
+                    }
+                    flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
+                else:
+                    raise click.ClickException(
+                        "No valid authentication method configured. Please provide either:\n"
+                        "  1. Credentials file via --credentials-file\n"
+                        "  2. Client ID and secret via --client-id and --client-secret"
+                    )
+                
                 creds = flow.run_local_server(port=0)
                 click.echo("Authentication successful!")
+                
             except Exception as e:
                 raise click.ClickException(f"Authentication failed: {e}")
         
         # Save the credentials for the next run
         try:
-            with open(TOKEN_FILE, 'w') as token:
+            # Ensure directory exists
+            token_path = Path(token_file)
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(token_file, 'w') as token:
                 token.write(creds.to_json())
         except Exception as e:
             click.echo(f"Warning: Could not save token file: {e}", err=True)
@@ -337,8 +489,47 @@ def get_gmail_signature(service):
 @click.option('--sender', help='Override sender email (if permitted)')
 @click.option('--signature/--no-signature', default=True, 
               help='Include Gmail default signature (default: enabled)')
-def send_email(to, subject, body, body_file, input_format, cc, bcc, attachment, sender, signature):
+# Configuration options
+@click.option('--credentials-file', type=click.Path(exists=True),
+              help='Path to OAuth2 credentials JSON file (CLI only, not supported in config file)')
+@click.option('--token-file', type=click.Path(),
+              help='Path to store/read OAuth2 token (default: ~/.config/gmail-cli/token.json)')
+@click.option('--client-id', 
+              help='OAuth2 client ID (can be set via CLI or config file)')
+@click.option('--client-secret', 
+              help='OAuth2 client secret (can be set via CLI or config file)')
+@click.option('--config-file', type=click.Path(),
+              help='Path to configuration JSON file with client_id/secret/token_file (default: ~/.config/gmail-cli/config.json)')
+def send_email(to, subject, body, body_file, input_format, cc, bcc, attachment, sender, signature,
+               credentials_file, token_file, client_id, client_secret, config_file):
     """Send an email via Gmail API."""
+    
+    # Initialize configuration system
+    gmail_config = GmailConfig()
+    
+    try:
+        # Ensure config directory exists
+        gmail_config.ensure_config_dir()
+        
+        # Merge configuration from file, CLI args, and defaults
+        config = gmail_config.merge_config(
+            config_file_path=config_file,
+            credentials_file=credentials_file,
+            token_file=token_file,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # Validate configuration
+        gmail_config.validate_config(config)
+        
+        # Handle legacy token migration
+        gmail_config.migrate_legacy_token(config)
+        
+    except click.ClickException:
+        raise
+    except Exception as e:
+        raise click.ClickException(f"Configuration error: {e}")
     
     # Validate input
     if not body and not body_file:
@@ -371,7 +562,7 @@ def send_email(to, subject, body, body_file, input_format, cc, bcc, attachment, 
     try:
         # Authenticate and build service
         click.echo("\nAuthenticating with Gmail...")
-        creds = authenticate_gmail()
+        creds = authenticate_gmail(config)
         service = build('gmail', 'v1', credentials=creds)
         
         # Get sender email if not provided
