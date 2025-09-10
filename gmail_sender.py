@@ -619,6 +619,62 @@ def remove_draft_id(draft_id):
             json.dump(drafts, f, indent=2)
 
 
+def get_draft_body(service, draft_id):
+    """Extract and decode body from a Gmail draft."""
+    try:
+        # Get the draft with full message details
+        draft = service.users().drafts().get(
+            userId='me',
+            id=draft_id
+        ).execute()
+        
+        message = draft['message']
+        payload = message['payload']
+        
+        # Try to extract body from various locations
+        body_text = None
+        body_html = None
+        
+        def extract_body_from_part(part):
+            """Helper function to extract body from a message part."""
+            nonlocal body_text, body_html
+            
+            mime_type = part.get('mimeType', '')
+            body = part.get('body', {})
+            
+            if 'data' in body:
+                decoded = base64.urlsafe_b64decode(body['data']).decode('utf-8')
+                if mime_type == 'text/plain':
+                    body_text = decoded
+                elif mime_type == 'text/html':
+                    body_html = decoded
+            
+            # Recursively check nested parts
+            if 'parts' in part:
+                for nested_part in part['parts']:
+                    extract_body_from_part(nested_part)
+        
+        # Extract body from payload
+        extract_body_from_part(payload)
+        
+        # Prefer plain text over HTML for editing
+        if body_text:
+            return body_text, 'plaintext'
+        elif body_html:
+            # Try to convert HTML to plain text for easier editing
+            return html_to_plain_text(body_html), 'plaintext'
+        else:
+            return None, None
+            
+    except HttpError as error:
+        if error.resp.status == 404:
+            raise click.ClickException(f"Draft not found: {draft_id}")
+        else:
+            raise click.ClickException(f"Error retrieving draft body: {error}")
+    except Exception as e:
+        raise click.ClickException(f"Error decoding draft body: {e}")
+
+
 # Configuration options shared by all commands
 def add_config_options(func):
     """Add common configuration options to a command."""
@@ -1119,13 +1175,22 @@ def update_draft_cmd(draft_id, to, subject, body, body_file, input_format, cc, b
             bcc_str = headers.get('Bcc', '')
             bcc = tuple(addr.strip() for addr in bcc_str.split(',')) if bcc_str else ()
         
-        # If no new body provided, we need to get the current body
-        # This is complex with Gmail API, so for now require body for updates
+        # If no new body provided, extract the current body from the draft
+        current_input_format = input_format
         if not body and not body_file:
-            raise click.ClickException(
-                "Body update is required when updating a draft. "
-                "Gmail API does not easily expose draft body for modification."
-            )
+            click.echo("No new body provided, extracting current body from draft...")
+            current_body, detected_format = get_draft_body(service, draft_id)
+            
+            if current_body:
+                body = current_body
+                # Use the detected format if we found plaintext
+                if detected_format:
+                    current_input_format = detected_format
+                click.echo(f"✓ Current body extracted ({len(current_body)} characters)")
+            else:
+                raise click.ClickException(
+                    "Could not extract body from draft. Please provide a new body using --body or --body-file."
+                )
         
         # Read body from file if specified
         if body_file:
@@ -1140,8 +1205,8 @@ def update_draft_cmd(draft_id, to, subject, body, body_file, input_format, cc, b
         click.echo(f"Updating draft from: {sender}")
         
         # Convert body to HTML
-        click.echo(f"Converting {input_format} content to HTML...")
-        body_html = convert_to_html(body, input_format)
+        click.echo(f"Converting {current_input_format} content to HTML...")
+        body_html = convert_to_html(body, current_input_format)
         
         # Get Gmail signature if requested
         gmail_signature = ''
