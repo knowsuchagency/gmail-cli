@@ -7,6 +7,7 @@
 #     "google-auth-httplib2",
 #     "click",
 #     "markdown",
+#     "Pygments",
 # ]
 # ///
 
@@ -187,11 +188,85 @@ def get_sender_email(service):
 
 
 def convert_to_html(content, input_format):
-    """Convert content to HTML based on input format."""
+    """Convert content to HTML based on input format with enhanced formatting."""
     if input_format == 'html':
         return content
     elif input_format == 'markdown':
-        return markdown.markdown(content)
+        # Use markdown extensions for better code formatting
+        html = markdown.markdown(
+            content,
+            extensions=[
+                'codehilite',  # Syntax highlighting
+                'fenced_code', # Better fenced code block support
+                'tables',      # Table support
+                'toc',         # Table of contents
+                'nl2br'        # Convert newlines to <br> tags
+            ],
+            extension_configs={
+                'codehilite': {
+                    'css_class': 'highlight',
+                    'use_pygments': True,
+                    'noclasses': True,  # Inline styles for email compatibility
+                    'linenos': False    # No line numbers for email
+                }
+            }
+        )
+        # Add custom CSS for better email formatting
+        css_styles = """
+        <style>
+        /* Code block styling */
+        .highlight {
+            background: #f6f8fa !important;
+            border: 1px solid #d1d9e0 !important;
+            border-radius: 6px !important;
+            padding: 16px !important;
+            margin: 16px 0 !important;
+            overflow-x: auto !important;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+            font-size: 14px !important;
+            line-height: 1.45 !important;
+        }
+        /* Inline code styling */
+        code {
+            background: #f6f8fa !important;
+            padding: 2px 4px !important;
+            border-radius: 3px !important;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace !important;
+            font-size: 85% !important;
+            color: #d73a49 !important;
+        }
+        /* Don't style code inside pre blocks */
+        pre code {
+            background: transparent !important;
+            padding: 0 !important;
+            border-radius: 0 !important;
+            color: inherit !important;
+        }
+        /* Table styling */
+        table {
+            border-collapse: collapse !important;
+            width: 100% !important;
+            margin: 16px 0 !important;
+        }
+        th, td {
+            border: 1px solid #d1d9e0 !important;
+            padding: 8px 12px !important;
+            text-align: left !important;
+        }
+        th {
+            background: #f6f8fa !important;
+            font-weight: bold !important;
+        }
+        /* Blockquote styling */
+        blockquote {
+            border-left: 4px solid #d1d9e0 !important;
+            padding: 0 16px !important;
+            margin: 16px 0 !important;
+            color: #6a737d !important;
+        }
+        </style>
+        """
+        return css_styles + html
     elif input_format == 'plaintext':
         # Convert plain text to HTML, preserving line breaks
         html_content = content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
