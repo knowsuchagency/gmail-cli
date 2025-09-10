@@ -4,6 +4,24 @@ version = "0.1.0"
 description = "Gmail CLI sender tool using OAuth2 authentication for sending emails via Gmail API"
 readme = "README.md"
 requires-python = ">=3.8"
+authors = [
+    {name = "Stephan Fitzpatrick", email = "knowsuchagency@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Communications :: Email",
+    "Topic :: Utilities",
+]
+keywords = ["gmail", "email", "cli", "oauth2", "google-api"]
+license = "MIT"
 dependencies = [
     "google-api-python-client",
     "google-auth",
@@ -13,3 +31,14 @@ dependencies = [
     "markdown",
     "Pygments",
 ]
+
+[project.urls]
+Homepage = "https://github.com/knowsuchagency/gmail-cli"
+Repository = "https://github.com/knowsuchagency/gmail-cli"
+
+[project.scripts]
+gmail-cli = "gmail_sender:send_email"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
