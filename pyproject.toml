@@ -37,7 +37,7 @@ Homepage = "https://github.com/knowsuchagency/gmail-cli"
 Repository = "https://github.com/knowsuchagency/gmail-cli"
 
 [project.scripts]
-gmail-cli = "gmail_sender:send_email"
+gmail-cli = "gmail_sender:cli"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

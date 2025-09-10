@@ -56,3 +56,6 @@ htmlcov/
 
 # Logs
 *.log
+
+# Claude
+.claude/settings.local.json
