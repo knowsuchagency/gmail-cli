@@ -9,12 +9,12 @@ Gmail CLI is a Python command-line tool for sending emails and managing drafts v
 ## Architecture
 
 - **Single-file design**: All functionality is contained in `gmail_sender.py`
-- **Multi-command CLI**: Uses Click subcommands for send, draft, list-drafts, update-draft, and send-draft operations
+- **Two-command CLI**: Uses Click subcommands for draft and send operations only
 - **pyproject.toml dependency management**: Dependencies are declared in `pyproject.toml` and managed with uv
 - **OAuth2 flow**: Uses Google's OAuth2 with local server callback for authentication
 - **Multi-format support**: Converts Markdown (default), HTML, and plaintext to HTML emails
-- **Gmail API integration**: Leverages Gmail API v1 for sending emails, managing drafts, and retrieving signatures
-- **Draft management**: Create, list, update, and send email drafts with local ID storage
+- **Gmail API integration**: Leverages Gmail API v1 for creating drafts, sending drafts, and retrieving signatures
+- **Simple draft workflow**: Create a draft, then send it by ID
 
 ### Key Components
 
@@ -22,55 +22,44 @@ Gmail CLI is a Python command-line tool for sending emails and managing drafts v
 - **Authentication layer** (`authenticate_gmail()`): Handles OAuth2 flow, token refresh, and persistence
 - **Content conversion** (`convert_to_html()`): Transforms input formats to HTML with enhanced styling
 - **Message creation** (`create_message()`, `create_message_with_attachment()`): Builds MIME messages
-- **Draft operations** (`create_draft()`, `list_user_drafts()`, `update_draft()`, `send_draft_message()`): Draft management
+- **Draft operations** (`create_draft()`): Creates email drafts
 - **Gmail integration** (`get_gmail_signature()`, `send_message()`): Interacts with Gmail API
-- **CLI commands** (`cli`, `send`, `draft`, `list_drafts`, `send_draft`, `update_draft_cmd`): Click-based subcommands
+- **CLI commands** (`cli`, `draft`, `send`): Two simple Click-based subcommands
 
 ## Common Development Commands
 
-### Sending Emails
+### Two-Step Email Workflow
 ```bash
-# Basic email sending (uses Markdown by default)
-gmail-cli send --to recipient@example.com --subject "Test" --body "**Bold** text"
+# Step 1: Create a draft (uses Markdown by default)
+gmail-cli draft --to recipient@example.com --subject "Test" --body "**Bold** text"
+# Output: Draft ID: r-123456789
 
-# Send from file
-gmail-cli send --to user@example.com --subject "Report" --body-file report.md
-
-# Send HTML email
-gmail-cli send --to user@example.com --subject "Newsletter" --body-file newsletter.html --input-format html
-
-# Send with attachments and multiple recipients
-gmail-cli send --to user1@example.com --to user2@example.com --cc manager@example.com --subject "Files" --body "See attached" --attachment file1.pdf --attachment file2.txt
+# Step 2: Send the draft
+gmail-cli send --draft-id r-123456789
 ```
 
-### Managing Drafts
+### Creating Drafts with Various Options
 ```bash
-# Create a draft
-gmail-cli draft --to recipient@example.com --subject "Draft" --body "Draft content"
+# Create draft from file
+gmail-cli draft --to user@example.com --subject "Report" --body-file report.md
 
-# List drafts
-gmail-cli list-drafts --max-results 20
+# Create HTML email draft
+gmail-cli draft --to user@example.com --subject "Newsletter" --body-file newsletter.html --input-format html
 
-# Update a draft
-gmail-cli update-draft --id r-123456789 --body "New content" --subject "Updated"
-
-# Send a draft
-gmail-cli send-draft --id r-123456789
-
-# Send existing draft via send command
-gmail-cli send --draft-id r-123456789
+# Create draft with attachments and multiple recipients
+gmail-cli draft --to user1@example.com --to user2@example.com --cc manager@example.com --subject "Files" --body "See attached" --attachment file1.pdf --attachment file2.txt
 ```
 
 ### Testing Different Input Formats
 ```bash
 # Test Markdown conversion (includes syntax highlighting and tables)
-gmail-cli send --to test@example.com --subject "Markdown Test" --body-file test_markdown.md
+gmail-cli draft --to test@example.com --subject "Markdown Test" --body-file test_markdown.md
 
 # Test code formatting
-gmail-cli send --to test@example.com --subject "Code Test" --body-file code_test.md
+gmail-cli draft --to test@example.com --subject "Code Test" --body-file code_test.md
 
 # Test plain text conversion
-gmail-cli send --to test@example.com --subject "Plain Text" --body "Simple text" --input-format plaintext
+gmail-cli draft --to test@example.com --subject "Plain Text" --body "Simple text" --input-format plaintext
 
 # Test draft with markdown
 gmail-cli draft --to test@example.com --subject "Draft Test" --body "# Markdown Draft\n\n**Bold** and *italic*"
@@ -90,8 +79,7 @@ ls -la ~/.config/gmail-cli/
 # Check if authentication token exists
 ls -la ~/.config/gmail-cli/token.json
 
-# Check draft storage
-cat ~/.config/gmail-cli/drafts.json
+# Note: Draft storage has been removed in the simplified version
 
 # Check virtual environment
 ls -la .venv/
@@ -168,8 +156,7 @@ gmail-cli/
 ├── .gitignore             # Excludes tokens and Python artifacts
 └── ~/.config/gmail-cli/    # Configuration directory (user home)
     ├── config.json         # Optional client ID/secret configuration
-    ├── token.json          # OAuth2 token (auto-generated)
-    └── drafts.json         # Local draft ID storage
+    └── token.json          # OAuth2 token (auto-generated)
 ```
 
 ## Dependencies Management
@@ -198,27 +185,19 @@ uv run gmail-cli --help
 ## Command Reference
 
 ### Main Commands
-- `gmail-cli send` - Send an email or existing draft
-- `gmail-cli draft` - Create a new draft
-- `gmail-cli list-drafts` - List all drafts
-- `gmail-cli send-draft` - Send a specific draft
-- `gmail-cli update-draft` - Update an existing draft
+- `gmail-cli draft` - Create a new draft with full email content
+- `gmail-cli send` - Send an existing draft by ID
 
-### Common Workflows
+### Standard Workflow
 
-#### Quick Send
 ```bash
-gmail-cli send --to user@example.com --subject "Quick message" --body "Hello!"
-```
-
-#### Draft Workflow
-```bash
-# Create draft
+# Step 1: Create draft with all content
 gmail-cli draft --to team@example.com --subject "Proposal" --body-file proposal.md
+# Output: Draft ID: r-123456789
 
-# Review and edit in Gmail UI or update via CLI
-gmail-cli update-draft --id r-123456789 --body-file revised_proposal.md
-
-# Send when ready
-gmail-cli send-draft --id r-123456789
+# Step 2: Send when ready
+gmail-cli send --draft-id r-123456789
 ```
+
+### Note on Draft Editing
+If you need to edit a draft after creation, use the Gmail web interface. The CLI follows a simple create-and-send model without update functionality.

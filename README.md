@@ -4,8 +4,7 @@ A command-line tool for sending emails and managing drafts via Gmail API using O
 
 ## Features
 
-- **Email drafts** - Create, list, update, and send email drafts
-- **Direct sending** - Send emails immediately or from existing drafts
+- **Two-step workflow** - Create a draft, then send it
 - **OAuth2 authentication** - Secure Gmail API access
 - **Multiple input formats** - Markdown (default), HTML, and plain text
 - **Automatic signature inclusion** - Uses your Gmail signature by default
@@ -25,60 +24,49 @@ uv add gmail-cli
 
 ## Usage
 
-### Sending Emails
+### Two-Step Email Workflow
+
+The Gmail CLI follows a simple two-step process:
+1. **Create a draft** with all your email content
+2. **Send the draft** using its ID
+
+### Step 1: Creating Drafts
 
 ```bash
-# Send email directly with Markdown content (default)
-gmail-cli send --to recipient@example.com --subject "Hello" --body "**Bold** and *italic* text"
-
-# Send from markdown file
-gmail-cli send --to user@example.com --subject "Report" --body-file report.md
-
-# Send HTML email
-gmail-cli send --to user@example.com --subject "Newsletter" --body-file newsletter.html --input-format html
-
-# Send with attachments
-gmail-cli send --to user@example.com --subject "Files" --body "See attached" --attachment file1.pdf --attachment file2.txt
-
-# Multiple recipients
-gmail-cli send --to user1@example.com --to user2@example.com --cc manager@example.com --subject "Meeting" --body "Agenda attached"
-```
-
-### Working with Drafts
-
-```bash
-# Create a draft
-gmail-cli draft --to recipient@example.com --subject "Draft Email" --body "This is a draft"
+# Create draft with Markdown content (default)
+gmail-cli draft --to recipient@example.com --subject "Hello" --body "**Bold** and *italic* text"
 # Returns: Draft ID: r-123456789
 
-# List all drafts
-gmail-cli list-drafts
-# Shows draft IDs, subjects, and recipients
+# Create draft from markdown file
+gmail-cli draft --to user@example.com --subject "Report" --body-file report.md
 
-# Update an existing draft
-gmail-cli update-draft --id r-123456789 --body "Updated content" --subject "New Subject"
+# Create HTML email draft
+gmail-cli draft --to user@example.com --subject "Newsletter" --body-file newsletter.html --input-format html
 
-# Send a draft
-gmail-cli send-draft --id r-123456789
+# Create draft with attachments
+gmail-cli draft --to user@example.com --subject "Files" --body "See attached" --attachment file1.pdf --attachment file2.txt
 
-# Send existing draft using send command
+# Multiple recipients
+gmail-cli draft --to user1@example.com --to user2@example.com --cc manager@example.com --subject "Meeting" --body "Agenda attached"
+```
+
+### Step 2: Sending Drafts
+
+```bash
+# Send a draft using its ID
 gmail-cli send --draft-id r-123456789
 ```
 
-### Draft Workflow Example
+### Complete Workflow Example
 
 ```bash
-# 1. Create a draft with initial content
+# 1. Create a draft with your content
 gmail-cli draft --to team@example.com --subject "Project Update" --body-file update.md --attachment report.pdf
+# Output: Draft created! Draft ID: r-123456789
 
-# 2. Review drafts
-gmail-cli list-drafts
-
-# 3. Update the draft if needed
-gmail-cli update-draft --id r-123456789 --body "Revised update content"
-
-# 4. Send when ready
-gmail-cli send-draft --id r-123456789
+# 2. Send the draft when ready
+gmail-cli send --draft-id r-123456789
+# Output: Draft sent successfully!
 ```
 
 ## Setup
@@ -108,14 +96,14 @@ On first use, the tool will open a browser for OAuth2 authentication and save th
 
 ## Command Options
 
-### Common Options (All Commands)
+### Common Options (Both Commands)
 - `--credentials-file` - Path to OAuth2 credentials JSON file
 - `--token-file` - Path to store/read OAuth2 token
 - `--client-id` - OAuth2 client ID
 - `--client-secret` - OAuth2 client secret
 - `--config-file` - Path to configuration JSON file
 
-### Send Command Options
+### Draft Command Options
 - `--to` - Recipient email addresses (required, multiple allowed)
 - `--subject` - Email subject (required)
 - `--body` - Email body text
@@ -126,20 +114,9 @@ On first use, the tool will open a browser for OAuth2 authentication and save th
 - `--attachment` - File attachments (multiple allowed)
 - `--sender` - Override sender email (if permitted)
 - `--signature/--no-signature` - Include Gmail signature (default: enabled)
-- `--draft-id` - Send an existing draft instead of creating new email
 
-### Draft Command Options
-Same as send command options (except `--draft-id`)
-
-### List-Drafts Command Options
-- `--max-results` - Maximum number of drafts to list (default: 10)
-
-### Update-Draft Command Options
-- `--id` - Draft ID to update (required)
-- All other options from send command (optional, for updating specific fields)
-
-### Send-Draft Command Options
-- `--id` - Draft ID to send (required)
+### Send Command Options
+- `--draft-id` - Draft ID to send (required)
 
 ## Dependencies
 

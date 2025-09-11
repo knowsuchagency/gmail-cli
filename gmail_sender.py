@@ -23,7 +23,6 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
-from datetime import datetime
 
 # Gmail API scopes for sending emails, reading profile, settings, and managing drafts
 SCOPES = [
@@ -497,182 +496,14 @@ def create_draft(service, user_id, message):
             raise click.ClickException(f"Gmail API error: {error}")
 
 
-def list_user_drafts(service, user_id='me', max_results=10):
-    """List user's drafts."""
-    try:
-        response = service.users().drafts().list(
-            userId=user_id,
-            maxResults=max_results
-        ).execute()
-        drafts = response.get('drafts', [])
-        
-        # Get details for each draft
-        draft_details = []
-        for draft in drafts:
-            try:
-                draft_data = service.users().drafts().get(
-                    userId=user_id, 
-                    id=draft['id']
-                ).execute()
-                message = draft_data['message']
-                headers = {h['name']: h['value'] for h in message['payload'].get('headers', [])}
-                draft_details.append({
-                    'id': draft['id'],
-                    'subject': headers.get('Subject', '(no subject)'),
-                    'to': headers.get('To', ''),
-                    'date': headers.get('Date', '')
-                })
-            except HttpError:
-                continue
-        
-        return draft_details
-    except HttpError as error:
-        raise click.ClickException(f"Error listing drafts: {error}")
 
 
-def update_draft(service, user_id, draft_id, message):
-    """Update an existing draft."""
-    try:
-        draft = service.users().drafts().update(
-            userId=user_id,
-            id=draft_id,
-            body={'message': message}
-        ).execute()
-        return draft
-    except HttpError as error:
-        if error.resp.status == 404:
-            raise click.ClickException(f"Draft not found: {draft_id}")
-        else:
-            raise click.ClickException(f"Error updating draft: {error}")
 
 
-def send_draft_message(service, user_id, draft_id):
-    """Send an existing draft."""
-    try:
-        message = service.users().drafts().send(
-            userId=user_id,
-            body={'id': draft_id}
-        ).execute()
-        return message
-    except HttpError as error:
-        if error.resp.status == 404:
-            raise click.ClickException(f"Draft not found: {draft_id}")
-        else:
-            raise click.ClickException(f"Error sending draft: {error}")
 
 
-def get_draft_store_path():
-    """Get the path to the draft ID storage file."""
-    config_dir = Path.home() / '.config' / 'gmail-cli'
-    return config_dir / 'drafts.json'
 
 
-def save_draft_id(draft_id, subject, to):
-    """Save draft ID to local storage for easy reference."""
-    store_path = get_draft_store_path()
-    store_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Load existing drafts
-    drafts = {}
-    if store_path.exists():
-        try:
-            with open(store_path, 'r') as f:
-                drafts = json.load(f)
-        except (json.JSONDecodeError, IOError):
-            drafts = {}
-    
-    # Add new draft
-    drafts[draft_id] = {
-        'subject': subject,
-        'to': to,
-        'created': datetime.now().isoformat()
-    }
-    
-    # Save back
-    with open(store_path, 'w') as f:
-        json.dump(drafts, f, indent=2)
-
-
-def load_draft_ids():
-    """Load saved draft IDs from local storage."""
-    store_path = get_draft_store_path()
-    if not store_path.exists():
-        return {}
-    
-    try:
-        with open(store_path, 'r') as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
-
-
-def remove_draft_id(draft_id):
-    """Remove a draft ID from local storage."""
-    store_path = get_draft_store_path()
-    if not store_path.exists():
-        return
-    
-    drafts = load_draft_ids()
-    if draft_id in drafts:
-        del drafts[draft_id]
-        with open(store_path, 'w') as f:
-            json.dump(drafts, f, indent=2)
-
-
-def get_draft_body(service, draft_id):
-    """Extract and decode body from a Gmail draft."""
-    try:
-        # Get the draft with full message details
-        draft = service.users().drafts().get(
-            userId='me',
-            id=draft_id
-        ).execute()
-        
-        message = draft['message']
-        payload = message['payload']
-        
-        # Try to extract body from various locations
-        body_text = None
-        body_html = None
-        
-        def extract_body_from_part(part):
-            """Helper function to extract body from a message part."""
-            nonlocal body_text, body_html
-            
-            mime_type = part.get('mimeType', '')
-            body = part.get('body', {})
-            
-            if 'data' in body:
-                decoded = base64.urlsafe_b64decode(body['data']).decode('utf-8')
-                if mime_type == 'text/plain':
-                    body_text = decoded
-                elif mime_type == 'text/html':
-                    body_html = decoded
-            
-            # Recursively check nested parts
-            if 'parts' in part:
-                for nested_part in part['parts']:
-                    extract_body_from_part(nested_part)
-        
-        # Extract body from payload
-        extract_body_from_part(payload)
-        
-        # Prefer plain text over HTML for editing
-        if body_text:
-            return body_text, 'plaintext'
-        elif body_html:
-            # Try to convert HTML to plain text for easier editing
-            return html_to_plain_text(body_html), 'plaintext'
-        else:
-            return None, None
-            
-    except HttpError as error:
-        if error.resp.status == 404:
-            raise click.ClickException(f"Draft not found: {draft_id}")
-        else:
-            raise click.ClickException(f"Error retrieving draft body: {error}")
-    except Exception as e:
-        raise click.ClickException(f"Error decoding draft body: {e}")
 
 
 # Configuration options shared by all commands
@@ -698,26 +529,10 @@ def cli():
 
 
 @cli.command()
-@click.option('--to', multiple=True, required=True, 
-              help='Recipient email addresses (can be used multiple times)')
-@click.option('--subject', required=True, help='Email subject')
-@click.option('--body', help='Email body text')
-@click.option('--body-file', type=click.Path(exists=True), 
-              help='Read email body from file')
-@click.option('--input-format', type=click.Choice(['markdown', 'html', 'plaintext']), 
-              default='markdown', help='Input format for email body (default: markdown)')
-@click.option('--cc', multiple=True, help='CC email addresses')
-@click.option('--bcc', multiple=True, help='BCC email addresses')
-@click.option('--attachment', multiple=True, type=click.Path(exists=True),
-              help='File paths to attach (can be used multiple times)')
-@click.option('--sender', help='Override sender email (if permitted)')
-@click.option('--signature/--no-signature', default=True, 
-              help='Include Gmail default signature (default: enabled)')
-@click.option('--draft-id', help='Send an existing draft instead of creating new email')
+@click.option('--draft-id', required=True, help='Draft ID to send')
 @add_config_options
-def send(to, subject, body, body_file, input_format, cc, bcc, attachment, sender, signature,
-         draft_id, credentials_file, token_file, client_id, client_secret, config_file):
-    """Send an email via Gmail API or send an existing draft."""
+def send(draft_id, credentials_file, token_file, client_id, client_secret, config_file):
+    """Send an existing draft."""
     
     # Initialize configuration system
     gmail_config = GmailConfig()
@@ -746,106 +561,35 @@ def send(to, subject, body, body_file, input_format, cc, bcc, attachment, sender
     except Exception as e:
         raise click.ClickException(f"Configuration error: {e}")
     
-    # If draft_id provided, send existing draft
-    if draft_id:
-        try:
-            # Authenticate and build service
-            click.echo("\nAuthenticating with Gmail...")
-            creds = authenticate_gmail(config)
-            service = build('gmail', 'v1', credentials=creds)
-            
-            click.echo(f"Sending draft {draft_id}...")
-            result = send_draft_message(service, 'me', draft_id)
-            
-            # Remove from local storage
-            remove_draft_id(draft_id)
-            
-            click.echo(f"✓ Draft sent successfully! Message ID: {result['id']}")
-            return
-        except click.ClickException:
-            raise
-        except Exception as e:
-            raise click.ClickException(f"Unexpected error sending draft: {e}")
-    
-    # Validate input for new email
-    if not body and not body_file:
-        raise click.ClickException("Either --body or --body-file must be provided")
-    
-    if body and body_file:
-        raise click.ClickException("Cannot specify both --body and --body-file")
-    
-    # Read body from file if specified
-    if body_file:
-        try:
-            with open(body_file, 'r', encoding='utf-8') as f:
-                body = f.read()
-        except Exception as e:
-            raise click.ClickException(f"Error reading body file: {e}")
-    
-    # Warn user if using plaintext with signature
-    if input_format == 'plaintext' and signature:
-        click.echo("\n⚠️  WARNING: You are using plaintext input format with Gmail signature enabled.", err=True)
-        click.echo("Your Gmail signature is in HTML format and will be converted to plain text.", err=True)
-        click.echo("This may result in suboptimal formatting (links will show as 'text (url)').", err=True)
-        click.echo("\nRecommended alternatives:", err=True)
-        click.echo("  1. Use --input-format=markdown (default) for better formatting", err=True)
-        click.echo("  2. Use --input-format=html if your content is already HTML", err=True)
-        click.echo("  3. Use --no-signature to disable signature", err=True)
-        
-        if not click.confirm("\nDo you want to continue with plaintext + signature conversion?"):
-            raise click.Abort()
-    
     try:
         # Authenticate and build service
         click.echo("\nAuthenticating with Gmail...")
         creds = authenticate_gmail(config)
         service = build('gmail', 'v1', credentials=creds)
         
-        # Get sender email if not provided
-        if not sender:
-            sender = get_sender_email(service)
+        click.echo(f"Sending draft {draft_id}...")
         
-        click.echo(f"Sending email from: {sender}")
+        # Send the draft using Gmail API
+        result = service.users().drafts().send(
+            userId='me',
+            body={'id': draft_id}
+        ).execute()
         
-        # Convert body to HTML based on input format
-        click.echo(f"Converting {input_format} content to HTML...")
-        body_html = convert_to_html(body, input_format)
+        click.echo(f"✓ Draft sent successfully! Message ID: {result['id']}")
         
-        # Get Gmail signature if requested
-        gmail_signature = ''
-        if signature:
-            click.echo("Retrieving Gmail signature...")
-            gmail_signature = get_gmail_signature(service)
-            if gmail_signature:
-                click.echo("✓ Gmail signature retrieved")
-            else:
-                click.echo("! No Gmail signature found")
-        
-        # Create message
-        if attachment:
-            click.echo(f"Creating HTML email with {len(attachment)} attachment(s)...")
-            message = create_message_with_attachment(
-                sender, list(to), subject, body_html, 
-                list(cc) if cc else None, 
-                list(bcc) if bcc else None, 
-                list(attachment),
-                gmail_signature
+    except HttpError as error:
+        if error.resp.status == 404:
+            raise click.ClickException(f"Draft not found: {draft_id}")
+        elif error.resp.status == 403:
+            raise click.ClickException(
+                "Gmail API access denied. Please check your OAuth consent and API permissions."
+            )
+        elif error.resp.status == 429:
+            raise click.ClickException(
+                "Gmail API quota exceeded. Please try again later."
             )
         else:
-            click.echo("Creating HTML email...")
-            message = create_message(
-                sender, list(to), subject, body_html,
-                list(cc) if cc else None,
-                list(bcc) if bcc else None,
-                gmail_signature
-            )
-        
-        # Send message
-        click.echo("Sending email...")
-        result = send_message(service, 'me', message)
-        
-        click.echo(f"✓ Email sent successfully! Message ID: {result['id']}")
-        
+            raise click.ClickException(f"Gmail API error: {error}")
     except click.ClickException:
         raise
     except Exception as e:
@@ -965,14 +709,11 @@ def draft(to, subject, body, body_file, input_format, cc, bcc, attachment, sende
         draft = create_draft(service, 'me', message)
         draft_id = draft['id']
         
-        # Save draft ID for easy reference
-        save_draft_id(draft_id, subject, ', '.join(to))
-        
         click.echo(f"✓ Draft created successfully!")
         click.echo(f"  Draft ID: {draft_id}")
         click.echo(f"  Subject: {subject}")
         click.echo(f"  To: {', '.join(to)}")
-        click.echo(f"\nYou can send this draft using: gmail-cli send-draft --id {draft_id}")
+        click.echo(f"\nTo send this draft, use: gmail-cli send --draft-id {draft_id}")
         
     except click.ClickException:
         raise
@@ -980,272 +721,10 @@ def draft(to, subject, body, body_file, input_format, cc, bcc, attachment, sende
         raise click.ClickException(f"Unexpected error: {e}")
 
 
-@cli.command('list-drafts')
-@click.option('--max-results', default=10, help='Maximum number of drafts to list')
-@add_config_options
-def list_drafts(max_results, credentials_file, token_file, client_id, client_secret, config_file):
-    """List existing email drafts."""
-    
-    # Initialize configuration system
-    gmail_config = GmailConfig()
-    
-    try:
-        # Ensure config directory exists
-        gmail_config.ensure_config_dir()
-        
-        # Merge configuration from file, CLI args, and defaults
-        config = gmail_config.merge_config(
-            config_file_path=config_file,
-            credentials_file=credentials_file,
-            token_file=token_file,
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        
-        # Validate configuration
-        gmail_config.validate_config(config)
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Configuration error: {e}")
-    
-    try:
-        # Authenticate and build service
-        click.echo("\nAuthenticating with Gmail...")
-        creds = authenticate_gmail(config)
-        service = build('gmail', 'v1', credentials=creds)
-        
-        # List drafts
-        click.echo(f"Fetching up to {max_results} drafts...\n")
-        drafts = list_user_drafts(service, 'me', max_results)
-        
-        if not drafts:
-            click.echo("No drafts found.")
-            return
-        
-        # Load saved draft IDs
-        saved_drafts = load_draft_ids()
-        
-        click.echo(f"Found {len(drafts)} draft(s):\n")
-        for draft in drafts:
-            click.echo(f"ID: {draft['id']}")
-            click.echo(f"  Subject: {draft['subject']}")
-            click.echo(f"  To: {draft['to']}")
-            if draft['date']:
-                click.echo(f"  Date: {draft['date']}")
-            if draft['id'] in saved_drafts:
-                click.echo(f"  (Saved locally)")
-            click.echo()
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Unexpected error: {e}")
 
 
-@cli.command('send-draft')
-@click.option('--id', 'draft_id', required=True, help='Draft ID to send')
-@add_config_options
-def send_draft(draft_id, credentials_file, token_file, client_id, client_secret, config_file):
-    """Send an existing draft."""
-    
-    # Initialize configuration system
-    gmail_config = GmailConfig()
-    
-    try:
-        # Ensure config directory exists
-        gmail_config.ensure_config_dir()
-        
-        # Merge configuration from file, CLI args, and defaults
-        config = gmail_config.merge_config(
-            config_file_path=config_file,
-            credentials_file=credentials_file,
-            token_file=token_file,
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        
-        # Validate configuration
-        gmail_config.validate_config(config)
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Configuration error: {e}")
-    
-    try:
-        # Authenticate and build service
-        click.echo("\nAuthenticating with Gmail...")
-        creds = authenticate_gmail(config)
-        service = build('gmail', 'v1', credentials=creds)
-        
-        click.echo(f"Sending draft {draft_id}...")
-        result = send_draft_message(service, 'me', draft_id)
-        
-        # Remove from local storage
-        remove_draft_id(draft_id)
-        
-        click.echo(f"✓ Draft sent successfully! Message ID: {result['id']}")
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Unexpected error: {e}")
 
 
-@cli.command('update-draft')
-@click.option('--id', 'draft_id', required=True, help='Draft ID to update')
-@click.option('--to', multiple=True, help='New recipient email addresses')
-@click.option('--subject', help='New email subject')
-@click.option('--body', help='New email body text')
-@click.option('--body-file', type=click.Path(exists=True), 
-              help='Read new email body from file')
-@click.option('--input-format', type=click.Choice(['markdown', 'html', 'plaintext']), 
-              default='markdown', help='Input format for email body (default: markdown)')
-@click.option('--cc', multiple=True, help='New CC email addresses')
-@click.option('--bcc', multiple=True, help='New BCC email addresses')
-@click.option('--attachment', multiple=True, type=click.Path(exists=True),
-              help='New file paths to attach')
-@click.option('--signature/--no-signature', default=True, 
-              help='Include Gmail default signature (default: enabled)')
-@add_config_options
-def update_draft_cmd(draft_id, to, subject, body, body_file, input_format, cc, bcc, attachment, signature,
-                     credentials_file, token_file, client_id, client_secret, config_file):
-    """Update an existing draft."""
-    
-    # Initialize configuration system
-    gmail_config = GmailConfig()
-    
-    try:
-        # Ensure config directory exists
-        gmail_config.ensure_config_dir()
-        
-        # Merge configuration from file, CLI args, and defaults
-        config = gmail_config.merge_config(
-            config_file_path=config_file,
-            credentials_file=credentials_file,
-            token_file=token_file,
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        
-        # Validate configuration
-        gmail_config.validate_config(config)
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Configuration error: {e}")
-    
-    # At least one update field must be provided
-    if not any([to, subject, body, body_file, cc, bcc, attachment]):
-        raise click.ClickException("At least one field to update must be provided")
-    
-    if body and body_file:
-        raise click.ClickException("Cannot specify both --body and --body-file")
-    
-    try:
-        # Authenticate and build service
-        click.echo("\nAuthenticating with Gmail...")
-        creds = authenticate_gmail(config)
-        service = build('gmail', 'v1', credentials=creds)
-        
-        # Get current draft to preserve fields not being updated
-        click.echo(f"Fetching draft {draft_id}...")
-        current_draft = service.users().drafts().get(
-            userId='me',
-            id=draft_id
-        ).execute()
-        
-        # Extract current headers
-        headers = {h['name']: h['value'] 
-                  for h in current_draft['message']['payload'].get('headers', [])}
-        
-        # Use current values as defaults
-        if not to:
-            to_str = headers.get('To', '')
-            to = tuple(addr.strip() for addr in to_str.split(',')) if to_str else ()
-        if not subject:
-            subject = headers.get('Subject', '')
-        if not cc:
-            cc_str = headers.get('Cc', '')
-            cc = tuple(addr.strip() for addr in cc_str.split(',')) if cc_str else ()
-        if not bcc:
-            bcc_str = headers.get('Bcc', '')
-            bcc = tuple(addr.strip() for addr in bcc_str.split(',')) if bcc_str else ()
-        
-        # If no new body provided, extract the current body from the draft
-        current_input_format = input_format
-        if not body and not body_file:
-            click.echo("No new body provided, extracting current body from draft...")
-            current_body, detected_format = get_draft_body(service, draft_id)
-            
-            if current_body:
-                body = current_body
-                # Use the detected format if we found plaintext
-                if detected_format:
-                    current_input_format = detected_format
-                click.echo(f"✓ Current body extracted ({len(current_body)} characters)")
-            else:
-                raise click.ClickException(
-                    "Could not extract body from draft. Please provide a new body using --body or --body-file."
-                )
-        
-        # Read body from file if specified
-        if body_file:
-            try:
-                with open(body_file, 'r', encoding='utf-8') as f:
-                    body = f.read()
-            except Exception as e:
-                raise click.ClickException(f"Error reading body file: {e}")
-        
-        # Get sender
-        sender = get_sender_email(service)
-        click.echo(f"Updating draft from: {sender}")
-        
-        # Convert body to HTML
-        click.echo(f"Converting {current_input_format} content to HTML...")
-        body_html = convert_to_html(body, current_input_format)
-        
-        # Get Gmail signature if requested
-        gmail_signature = ''
-        if signature:
-            click.echo("Retrieving Gmail signature...")
-            gmail_signature = get_gmail_signature(service)
-        
-        # Create new message
-        if attachment:
-            click.echo(f"Creating updated message with {len(attachment)} attachment(s)...")
-            message = create_message_with_attachment(
-                sender, list(to), subject, body_html, 
-                list(cc) if cc else None, 
-                list(bcc) if bcc else None, 
-                list(attachment),
-                gmail_signature
-            )
-        else:
-            click.echo("Creating updated message...")
-            message = create_message(
-                sender, list(to), subject, body_html,
-                list(cc) if cc else None,
-                list(bcc) if bcc else None,
-                gmail_signature
-            )
-        
-        # Update draft
-        click.echo("Updating draft...")
-        updated_draft = update_draft(service, 'me', draft_id, message)
-        
-        click.echo(f"✓ Draft updated successfully!")
-        click.echo(f"  Draft ID: {draft_id}")
-        click.echo(f"  Subject: {subject}")
-        click.echo(f"  To: {', '.join(to)}")
-        
-    except click.ClickException:
-        raise
-    except Exception as e:
-        raise click.ClickException(f"Unexpected error: {e}")
 
 
 if __name__ == '__main__':
