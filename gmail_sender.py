@@ -496,6 +496,344 @@ def create_draft(service, user_id, message):
             raise click.ClickException(f"Gmail API error: {error}")
 
 
+def get_message_details(service, message_id):
+    """Retrieve message details including headers and thread ID."""
+    try:
+        message = service.users().messages().get(
+            userId='me',
+            id=message_id,
+            format='full'
+        ).execute()
+        return message
+    except HttpError as error:
+        if error.resp.status == 404:
+            raise click.ClickException(f"Message not found: {message_id}")
+        else:
+            raise click.ClickException(f"Gmail API error: {error}")
+
+
+def get_thread_details(service, thread_id):
+    """Retrieve full thread context."""
+    try:
+        thread = service.users().threads().get(
+            userId='me',
+            id=thread_id
+        ).execute()
+        return thread
+    except HttpError as error:
+        if error.resp.status == 404:
+            raise click.ClickException(f"Thread not found: {thread_id}")
+        else:
+            raise click.ClickException(f"Gmail API error: {error}")
+
+
+def extract_reply_headers(message):
+    """Extract necessary headers for reply."""
+    headers = {}
+    for header in message['payload'].get('headers', []):
+        name = header['name'].lower()
+        if name in ['message-id', 'from', 'to', 'cc', 'subject', 'references', 'date']:
+            headers[name] = header['value']
+    return headers
+
+
+def parse_email_addresses(header_value):
+    """Parse email addresses from header value."""
+    import email.utils
+    addresses = []
+    if not header_value:
+        return addresses
+    for name, addr in email.utils.getaddresses([header_value]):
+        if addr:
+            addresses.append(addr)
+    return addresses
+
+
+def determine_reply_recipients(original_headers, sender_email, reply_all, additional_to, additional_cc):
+    """Determine recipients for reply based on original message."""
+    recipients = {'to': [], 'cc': []}
+    
+    # Parse email addresses from headers
+    from_addr = parse_email_addresses(original_headers.get('from', ''))
+    to_addrs = parse_email_addresses(original_headers.get('to', ''))
+    cc_addrs = parse_email_addresses(original_headers.get('cc', ''))
+    
+    if reply_all:
+        # Reply to sender and all recipients
+        recipients['to'] = from_addr[:1] if from_addr else []  # Only first from address
+        
+        # Add other TO recipients (excluding self)
+        for addr in to_addrs:
+            if addr.lower() != sender_email.lower() and addr not in recipients['to']:
+                recipients['cc'].append(addr)
+        
+        # Add CC recipients (excluding self)
+        for addr in cc_addrs:
+            if addr.lower() != sender_email.lower() and addr not in recipients['cc']:
+                recipients['cc'].append(addr)
+    else:
+        # Reply only to sender
+        recipients['to'] = from_addr[:1] if from_addr else []
+    
+    # Add additional recipients
+    if additional_to:
+        for addr in additional_to:
+            if addr not in recipients['to']:
+                recipients['to'].append(addr)
+    if additional_cc:
+        for addr in additional_cc:
+            if addr not in recipients['cc']:
+                recipients['cc'].append(addr)
+    
+    return recipients
+
+
+def extract_message_body(message):
+    """Extract the body content from a message."""
+    def get_body_from_parts(parts):
+        body = ''
+        for part in parts:
+            if part['mimeType'] == 'text/html':
+                data = part['body'].get('data', '')
+                if data:
+                    body = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+                    return body
+            elif part['mimeType'] == 'text/plain' and not body:
+                data = part['body'].get('data', '')
+                if data:
+                    text = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+                    body = text.replace('\n', '<br>')
+            elif 'parts' in part:
+                body = get_body_from_parts(part['parts'])
+                if body:
+                    return body
+        return body
+    
+    payload = message.get('payload', {})
+    if 'parts' in payload:
+        return get_body_from_parts(payload['parts'])
+    else:
+        # Single part message
+        data = payload.get('body', {}).get('data', '')
+        if data:
+            decoded = base64.urlsafe_b64decode(data).decode('utf-8', errors='ignore')
+            # Check if it's HTML or plain text
+            mime_type = payload.get('mimeType', 'text/plain')
+            if mime_type == 'text/plain':
+                decoded = decoded.replace('\n', '<br>')
+            return decoded
+    return ''
+
+
+def format_quoted_message(original_msg):
+    """Format original message as quoted text for reply."""
+    from datetime import datetime
+    
+    # Extract message body
+    body = extract_message_body(original_msg)
+    
+    # Get sender and date information
+    headers = extract_reply_headers(original_msg)
+    from_header = headers.get('from', 'Unknown')
+    
+    # Parse date from headers if available, otherwise use internal date
+    date_header = headers.get('date', '')
+    if date_header:
+        try:
+            # Try to parse the date header
+            import email.utils
+            date_tuple = email.utils.parsedate_to_datetime(date_header)
+            date_str = date_tuple.strftime('%a, %b %d, %Y at %I:%M %p')
+        except:
+            # Fallback to internal date
+            internal_date = original_msg.get('internalDate')
+            if internal_date:
+                timestamp = datetime.fromtimestamp(int(internal_date) / 1000)
+                date_str = timestamp.strftime('%a, %b %d, %Y at %I:%M %p')
+            else:
+                date_str = 'Unknown date'
+    else:
+        internal_date = original_msg.get('internalDate')
+        if internal_date:
+            timestamp = datetime.fromtimestamp(int(internal_date) / 1000)
+            date_str = timestamp.strftime('%a, %b %d, %Y at %I:%M %p')
+        else:
+            date_str = 'Unknown date'
+    
+    # Format as Gmail-style quoted text
+    quoted_html = f"""
+    <div class="gmail_quote">
+        <div dir="ltr" class="gmail_attr">
+            On {date_str}, {from_header} wrote:<br>
+        </div>
+        <blockquote class="gmail_quote" style="margin:0px 0px 0px 0.8ex;border-left:1px solid rgb(204,204,204);padding-left:1ex">
+            {body}
+        </blockquote>
+    </div>
+    """
+    
+    return quoted_html
+
+
+def create_reply_message(original_msg, sender, body_html, 
+                        reply_all=False, additional_to=None, 
+                        additional_cc=None, additional_bcc=None, 
+                        signature='', include_quoted=True):
+    """Create a reply message with proper headers and formatting."""
+    
+    # Extract original message details
+    original_headers = extract_reply_headers(original_msg)
+    
+    message = MIMEMultipart()
+    
+    # Set threading headers
+    if 'message-id' in original_headers:
+        message['In-Reply-To'] = original_headers['message-id']
+        references = original_headers.get('references', '')
+        if references:
+            message['References'] = f"{references} {original_headers['message-id']}"
+        else:
+            message['References'] = original_headers['message-id']
+    
+    # Determine recipients
+    recipients = determine_reply_recipients(
+        original_headers, 
+        sender, 
+        reply_all, 
+        additional_to,
+        additional_cc
+    )
+    
+    if not recipients['to']:
+        raise click.ClickException("No recipients found for reply. Original message may have invalid headers.")
+    
+    message['to'] = ', '.join(recipients['to'])
+    if recipients['cc']:
+        message['cc'] = ', '.join(recipients['cc'])
+    if additional_bcc:
+        message['bcc'] = ', '.join(additional_bcc)
+    
+    message['from'] = sender
+    
+    # Handle subject (add Re: if not present)
+    original_subject = original_headers.get('subject', '')
+    if not original_subject.lower().startswith('re: '):
+        message['subject'] = f"Re: {original_subject}"
+    else:
+        message['subject'] = original_subject
+    
+    # Build reply body with quoted text
+    if include_quoted:
+        quoted_text = format_quoted_message(original_msg)
+        full_body = f"{body_html}{signature}<br><br>{quoted_text}"
+    else:
+        full_body = f"{body_html}{signature}"
+    
+    message.attach(MIMEText(full_body, 'html'))
+    
+    raw_message = {
+        'raw': base64.urlsafe_b64encode(message.as_bytes()).decode()
+    }
+    
+    # Preserve thread ID
+    thread_id = original_msg.get('threadId')
+    if thread_id:
+        raw_message['threadId'] = thread_id
+    
+    return raw_message
+
+
+def create_reply_message_with_attachment(original_msg, sender, body_html,
+                                        reply_all=False, additional_to=None,
+                                        additional_cc=None, additional_bcc=None,
+                                        attachments=None, signature='', include_quoted=True):
+    """Create a reply message with attachments."""
+    
+    # Extract original message details
+    original_headers = extract_reply_headers(original_msg)
+    
+    message = MIMEMultipart()
+    
+    # Set threading headers
+    if 'message-id' in original_headers:
+        message['In-Reply-To'] = original_headers['message-id']
+        references = original_headers.get('references', '')
+        if references:
+            message['References'] = f"{references} {original_headers['message-id']}"
+        else:
+            message['References'] = original_headers['message-id']
+    
+    # Determine recipients
+    recipients = determine_reply_recipients(
+        original_headers, 
+        sender, 
+        reply_all, 
+        additional_to,
+        additional_cc
+    )
+    
+    if not recipients['to']:
+        raise click.ClickException("No recipients found for reply. Original message may have invalid headers.")
+    
+    message['to'] = ', '.join(recipients['to'])
+    if recipients['cc']:
+        message['cc'] = ', '.join(recipients['cc'])
+    if additional_bcc:
+        message['bcc'] = ', '.join(additional_bcc)
+    
+    message['from'] = sender
+    
+    # Handle subject (add Re: if not present)
+    original_subject = original_headers.get('subject', '')
+    if not original_subject.lower().startswith('re: '):
+        message['subject'] = f"Re: {original_subject}"
+    else:
+        message['subject'] = original_subject
+    
+    # Build reply body with quoted text
+    if include_quoted:
+        quoted_text = format_quoted_message(original_msg)
+        full_body = f"{body_html}{signature}<br><br>{quoted_text}"
+    else:
+        full_body = f"{body_html}{signature}"
+    
+    message.attach(MIMEText(full_body, 'html'))
+    
+    # Add attachments
+    if attachments:
+        for file_path in attachments:
+            if not os.path.isfile(file_path):
+                raise click.ClickException(f"Attachment file not found: {file_path}")
+            
+            content_type, encoding = mimetypes.guess_type(file_path)
+            
+            if content_type is None or encoding is not None:
+                content_type = 'application/octet-stream'
+            
+            main_type, sub_type = content_type.split('/', 1)
+            
+            with open(file_path, 'rb') as fp:
+                attachment = MIMEBase(main_type, sub_type)
+                attachment.set_payload(fp.read())
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    'Content-Disposition',
+                    f'attachment; filename="{Path(file_path).name}"'
+                )
+                message.attach(attachment)
+    
+    raw_message = {
+        'raw': base64.urlsafe_b64encode(message.as_bytes()).decode()
+    }
+    
+    # Preserve thread ID
+    thread_id = original_msg.get('threadId')
+    if thread_id:
+        raw_message['threadId'] = thread_id
+    
+    return raw_message
+
+
 
 
 
@@ -721,10 +1059,167 @@ def draft(to, subject, body, body_file, input_format, cc, bcc, attachment, sende
         raise click.ClickException(f"Unexpected error: {e}")
 
 
-
-
-
-
+@cli.command()
+@click.option('--message-id', help='Message ID to reply to')
+@click.option('--thread-id', help='Thread ID to reply to (uses latest message)')
+@click.option('--body', help='Reply body text')
+@click.option('--body-file', type=click.Path(exists=True), 
+              help='Read reply body from file')
+@click.option('--input-format', type=click.Choice(['markdown', 'html', 'plaintext']), 
+              default='markdown', help='Input format for reply body')
+@click.option('--reply-all', is_flag=True, help='Reply to all recipients')
+@click.option('--to', multiple=True, help='Additional TO recipients')
+@click.option('--cc', multiple=True, help='Additional CC recipients')
+@click.option('--bcc', multiple=True, help='BCC recipients')
+@click.option('--attachment', multiple=True, type=click.Path(exists=True),
+              help='File paths to attach')
+@click.option('--no-quote', is_flag=True, help='Don\'t include quoted original message')
+@click.option('--signature/--no-signature', default=True, 
+              help='Include Gmail default signature')
+@add_config_options
+def reply(message_id, thread_id, body, body_file, input_format, reply_all,
+          to, cc, bcc, attachment, no_quote, signature,
+          credentials_file, token_file, client_id, client_secret, config_file):
+    """Reply to an existing email message or thread. Creates a draft reply."""
+    
+    # Validate input
+    if not message_id and not thread_id:
+        raise click.ClickException("Either --message-id or --thread-id must be provided")
+    
+    if message_id and thread_id:
+        raise click.ClickException("Cannot specify both --message-id and --thread-id")
+    
+    if not body and not body_file:
+        raise click.ClickException("Either --body or --body-file must be provided")
+    
+    if body and body_file:
+        raise click.ClickException("Cannot specify both --body and --body-file")
+    
+    # Initialize configuration system
+    gmail_config = GmailConfig()
+    
+    try:
+        # Ensure config directory exists
+        gmail_config.ensure_config_dir()
+        
+        # Merge configuration from file, CLI args, and defaults
+        config = gmail_config.merge_config(
+            config_file_path=config_file,
+            credentials_file=credentials_file,
+            token_file=token_file,
+            client_id=client_id,
+            client_secret=client_secret
+        )
+        
+        # Validate configuration
+        gmail_config.validate_config(config)
+        
+        # Handle legacy token migration
+        gmail_config.migrate_legacy_token(config)
+        
+    except click.ClickException:
+        raise
+    except Exception as e:
+        raise click.ClickException(f"Configuration error: {e}")
+    
+    # Read body from file if specified
+    if body_file:
+        try:
+            with open(body_file, 'r', encoding='utf-8') as f:
+                body = f.read()
+        except Exception as e:
+            raise click.ClickException(f"Error reading body file: {e}")
+    
+    try:
+        # Authenticate and build service
+        click.echo("\nAuthenticating with Gmail...")
+        creds = authenticate_gmail(config)
+        service = build('gmail', 'v1', credentials=creds)
+        
+        # Get original message
+        if message_id:
+            click.echo(f"Retrieving message {message_id}...")
+            original_msg = get_message_details(service, message_id)
+        else:
+            # Get latest message from thread
+            click.echo(f"Retrieving thread {thread_id}...")
+            thread = get_thread_details(service, thread_id)
+            messages = thread.get('messages', [])
+            if not messages:
+                raise click.ClickException(f"No messages found in thread {thread_id}")
+            original_msg = messages[-1]  # Reply to latest message
+            message_id = original_msg['id']
+            click.echo(f"Replying to latest message in thread: {message_id}")
+        
+        # Get sender email
+        sender = get_sender_email(service)
+        click.echo(f"Creating reply from: {sender}")
+        
+        # Convert body to HTML
+        click.echo(f"Converting {input_format} content to HTML...")
+        body_html = convert_to_html(body, input_format)
+        
+        # Get signature if requested
+        gmail_signature = ''
+        if signature:
+            click.echo("Retrieving Gmail signature...")
+            gmail_signature = get_gmail_signature(service)
+            if gmail_signature:
+                click.echo("✓ Gmail signature retrieved")
+            else:
+                click.echo("! No Gmail signature found")
+        
+        # Create reply message
+        if attachment:
+            click.echo(f"Creating reply draft with {len(attachment)} attachment(s)...")
+            message = create_reply_message_with_attachment(
+                original_msg, sender, body_html, reply_all,
+                list(to) if to else None,
+                list(cc) if cc else None,
+                list(bcc) if bcc else None,
+                list(attachment),
+                gmail_signature,
+                not no_quote
+            )
+        else:
+            click.echo("Creating reply draft...")
+            message = create_reply_message(
+                original_msg, sender, body_html, reply_all,
+                list(to) if to else None,
+                list(cc) if cc else None,
+                list(bcc) if bcc else None,
+                gmail_signature,
+                not no_quote
+            )
+        
+        # Always create a draft (never send immediately)
+        click.echo("Creating draft...")
+        draft = create_draft(service, 'me', message)
+        draft_id = draft['id']
+        
+        click.echo(f"✓ Reply draft created successfully!")
+        click.echo(f"  Draft ID: {draft_id}")
+        click.echo(f"  Thread: {original_msg.get('threadId')}")
+        
+        # Extract and display reply details
+        headers = extract_reply_headers(original_msg)
+        original_subject = headers.get('subject', 'No subject')
+        reply_subject = f"Re: {original_subject}" if not original_subject.lower().startswith('re: ') else original_subject
+        
+        click.echo(f"  Subject: {reply_subject}")
+        
+        # Show recipient summary
+        if reply_all:
+            click.echo(f"  Reply mode: Reply All")
+        else:
+            click.echo(f"  Reply mode: Reply to sender")
+        
+        click.echo(f"\nTo send this reply, use: gmail-cli send --draft-id {draft_id}")
+        
+    except click.ClickException:
+        raise
+    except Exception as e:
+        raise click.ClickException(f"Unexpected error: {e}")
 
 
 if __name__ == '__main__':
