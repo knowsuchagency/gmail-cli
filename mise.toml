@@ -1,0 +1,6 @@
+[env]
+_.file = ".env"
+
+[tasks.publish]
+run = "rm -rf dist/* && uv build && uv publish"
+description = "Clean dist, build, and publish package"
