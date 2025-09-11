@@ -21,7 +21,7 @@ A command-line tool for sending emails, replying to messages, and managing draft
 pip install gmail-cli
 
 # Or using uv
-uv add gmail-cli
+uvx gmail-cli
 ```
 
 ## Usage
@@ -177,13 +177,3 @@ On first use, the tool will open a browser for OAuth2 authentication and save th
 ### Send Command Options
 - `--draft-id` - Draft ID to send (required)
 
-## Dependencies
-
-All dependencies are managed via PEP 723 inline metadata:
-- google-api-python-client
-- google-auth
-- google-auth-oauthlib  
-- google-auth-httplib2
-- click
-- markdown
-- Pygments (for syntax highlighting in code blocks)
